@@ -82,6 +82,8 @@ static int init_port(struct app *app)
 	struct rte_eth_txconf txconf;
 	uint16_t nb_rxd = RX_DESC_DEFAULT;
 	uint16_t nb_txd = TX_DESC_DEFAULT;
+	uint16_t rx_queue_count = app->rx_queue_id + 1;
+	uint16_t tx_queue_count = app->tx_queue_id + 1;
 	uint64_t rss_hf = 0;
 	int ret;
 
@@ -89,16 +91,8 @@ static int init_port(struct app *app)
 	if (ret != 0)
 		return ret;
 
-	if (app->rx_queue_id >= dev_info.max_rx_queues ||
-			app->tx_queue_id >= dev_info.max_tx_queues) {
-		fprintf(stderr,
-			"port %u supports max RX/TX queues %u/%u, requested %u/%u\n",
-			app->port_id, dev_info.max_rx_queues, dev_info.max_tx_queues,
-			app->rx_queue_id, app->tx_queue_id);
-		return -EINVAL;
-	}
-
-	if (app->rx_queue_id > 0) {
+	app->rss_enabled = false;
+	if (rx_queue_count > 1) {
 		rss_hf = RTE_ETH_RSS_NONFRAG_IPV4_UDP;
 		rss_hf &= dev_info.flow_type_rss_offloads;
 		if (rss_hf == 0) {
@@ -108,14 +102,26 @@ static int init_port(struct app *app)
 		if (rss_hf != 0) {
 			port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
 			port_conf.rx_adv_conf.rss_conf.rss_hf = rss_hf;
+			app->rss_enabled = true;
+		} else {
+			rx_queue_count = 1;
 		}
+	}
+
+	if (rx_queue_count > dev_info.max_rx_queues ||
+			tx_queue_count > dev_info.max_tx_queues) {
+		fprintf(stderr,
+			"port %u supports max RX/TX queues %u/%u, requested %u/%u\n",
+			app->port_id, dev_info.max_rx_queues, dev_info.max_tx_queues,
+			rx_queue_count, tx_queue_count);
+		return -EINVAL;
 	}
 
 	if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 		port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
-	ret = rte_eth_dev_configure(app->port_id, app->rx_queue_id + 1,
-		app->tx_queue_id + 1, &port_conf);
+	ret = rte_eth_dev_configure(app->port_id, rx_queue_count,
+		tx_queue_count, &port_conf);
 	if (ret < 0)
 		return ret;
 
@@ -125,7 +131,7 @@ static int init_port(struct app *app)
 
 	rxconf = dev_info.default_rxconf;
 	rxconf.offloads = port_conf.rxmode.offloads;
-	for (uint16_t q = 0; q <= app->rx_queue_id; q++) {
+	for (uint16_t q = 0; q < rx_queue_count; q++) {
 		ret = rte_eth_rx_queue_setup(app->port_id, q, nb_rxd,
 			rte_eth_dev_socket_id(app->port_id), &rxconf, app->mbuf_pool);
 		if (ret < 0)
@@ -134,7 +140,7 @@ static int init_port(struct app *app)
 
 	txconf = dev_info.default_txconf;
 	txconf.offloads = port_conf.txmode.offloads;
-	for (uint16_t q = 0; q <= app->tx_queue_id; q++) {
+	for (uint16_t q = 0; q < tx_queue_count; q++) {
 		ret = rte_eth_tx_queue_setup(app->port_id, q, nb_txd,
 			rte_eth_dev_socket_id(app->port_id), &txconf);
 		if (ret < 0)
@@ -157,8 +163,8 @@ static int init_port(struct app *app)
 		return ret;
 
 	printf("port %u started, rxq %u, txq %u, RSS %s, MAC " RTE_ETHER_ADDR_PRT_FMT "\n",
-		app->port_id, app->rx_queue_id, app->tx_queue_id,
-		rss_hf != 0 ? "on" : "off",
+		app->port_id, rx_queue_count, tx_queue_count,
+		app->rss_enabled ? "on" : "off",
 		RTE_ETHER_ADDR_BYTES(&app->port_mac));
 	return 0;
 }

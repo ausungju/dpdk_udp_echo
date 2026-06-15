@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include <rte_byteorder.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
@@ -7,16 +9,23 @@
 #include <rte_ip.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
+#include <rte_ring.h>
 #include <rte_udp.h>
 
 #include "common.h"
 #include "server.h"
 
+#define SERVER_SW_RING_SIZE 4096
+
 static struct app app = APP_INITIALIZER("echo_server");
 static struct server_conf server_conf;
 static struct app lcore_apps[RTE_MAX_LCORE];
 static bool lcore_enabled[RTE_MAX_LCORE];
+static struct rte_ring *worker_rings[RTE_MAX_LCORE];
+static unsigned int worker_lcores[MAX_APP_WORKERS];
+static uint16_t lcore_slot[RTE_MAX_LCORE];
 static uint16_t worker_count;
+static bool use_sw_fanout;
 
 static bool prepare_echo_packet(struct app *worker_app, struct rte_mbuf *m)
 {
@@ -80,11 +89,65 @@ static void maybe_print_aggregate_stats(uint64_t cur_tsc, uint64_t *prev_tsc)
 	print_stats(&app, lcore_apps, lcore_enabled);
 }
 
-static int server_worker_main(__rte_unused void *arg)
+static void process_echo_burst(struct app *worker_app,
+	struct rte_mbuf **bufs, uint16_t nb_rx)
+{
+	uint16_t echo_len[MAX_PKT_BURST];
+	uint16_t nb_echo = 0;
+	uint16_t nb_tx;
+	uint64_t echo_bytes = 0;
+
+	if (nb_rx == 0)
+		return;
+
+	stats_add_u64(&worker_app->stats.rx, nb_rx);
+	for (uint16_t i = 0; i < nb_rx; i++) {
+		const uint16_t len = rte_pktmbuf_pkt_len(bufs[i]);
+
+		stats_add_u64(&worker_app->stats.rx_bytes, len);
+		if (prepare_echo_packet(worker_app, bufs[i])) {
+			echo_len[nb_echo] = len;
+			echo_bytes += len;
+			bufs[nb_echo++] = bufs[i];
+			stats_inc_u64(&worker_app->stats.echoed);
+		} else {
+			stats_inc_u64(&worker_app->stats.ignored);
+			rte_pktmbuf_free(bufs[i]);
+		}
+	}
+
+	if (nb_echo == 0)
+		return;
+
+	nb_tx = rte_eth_tx_burst(worker_app->port_id, worker_app->tx_queue_id,
+		bufs, nb_echo);
+	if (nb_tx > nb_echo)
+		nb_tx = nb_echo;
+	stats_add_u64(&worker_app->stats.tx, nb_tx);
+	if (nb_tx == nb_echo) {
+		stats_add_u64(&worker_app->stats.tx_bytes, echo_bytes);
+	} else {
+		for (uint16_t i = 0; i < nb_tx; i++)
+			stats_add_u64(&worker_app->stats.tx_bytes, echo_len[i]);
+	}
+
+	free_unsent_mbufs(worker_app, bufs, nb_tx, nb_echo);
+}
+
+static void free_dropped_dispatch(struct app *worker_app,
+	struct rte_mbuf **bufs, uint16_t start, uint16_t count)
+{
+	if (count == 0)
+		return;
+	stats_add_u64(&worker_app->stats.dropped, count);
+	for (uint16_t i = start; i < start + count; i++)
+		rte_pktmbuf_free(bufs[i]);
+}
+
+static int server_poll_mode_main(void)
 {
 	struct app *worker_app;
 	struct rte_mbuf *bufs[MAX_PKT_BURST];
-	uint16_t echo_len[MAX_PKT_BURST];
 	uint64_t prev_tsc = rte_rdtsc();
 	const unsigned int lcore_id = rte_lcore_id();
 
@@ -97,11 +160,8 @@ static int server_worker_main(__rte_unused void *arg)
 		worker_app->tx_queue_id, server_conf.burst_size);
 
 	while (!force_quit) {
-		const uint64_t cur_tsc = rte_rdtsc();
 		uint16_t nb_rx;
-		uint16_t nb_echo = 0;
-		uint16_t nb_tx;
-		uint64_t echo_bytes = 0;
+		const uint64_t cur_tsc = rte_rdtsc();
 
 		if (lcore_id == rte_get_main_lcore())
 			maybe_print_aggregate_stats(cur_tsc, &prev_tsc);
@@ -110,42 +170,110 @@ static int server_worker_main(__rte_unused void *arg)
 			bufs, server_conf.burst_size);
 		if (nb_rx == 0)
 			continue;
-
-		stats_add_u64(&worker_app->stats.rx, nb_rx);
-		for (uint16_t i = 0; i < nb_rx; i++) {
-			const uint16_t len = rte_pktmbuf_pkt_len(bufs[i]);
-
-			stats_add_u64(&worker_app->stats.rx_bytes, len);
-			if (prepare_echo_packet(worker_app, bufs[i])) {
-				echo_len[nb_echo] = len;
-				echo_bytes += len;
-				bufs[nb_echo++] = bufs[i];
-				stats_inc_u64(&worker_app->stats.echoed);
-			} else {
-				stats_inc_u64(&worker_app->stats.ignored);
-				rte_pktmbuf_free(bufs[i]);
-			}
-		}
-
-		if (nb_echo == 0)
-			continue;
-
-		nb_tx = rte_eth_tx_burst(worker_app->port_id, worker_app->tx_queue_id,
-			bufs, nb_echo);
-		if (nb_tx > nb_echo)
-			nb_tx = nb_echo;
-		stats_add_u64(&worker_app->stats.tx, nb_tx);
-		if (nb_tx == nb_echo) {
-			stats_add_u64(&worker_app->stats.tx_bytes, echo_bytes);
-		} else {
-			for (uint16_t i = 0; i < nb_tx; i++)
-				stats_add_u64(&worker_app->stats.tx_bytes, echo_len[i]);
-		}
-
-		free_unsent_mbufs(worker_app, bufs, nb_tx, nb_echo);
+		process_echo_burst(worker_app, bufs, nb_rx);
 	}
 
 	return 0;
+}
+
+static int server_sw_dispatch_main(void)
+{
+	struct app *main_app = &lcore_apps[rte_lcore_id()];
+	struct rte_mbuf *rx_bufs[MAX_PKT_BURST];
+	struct rte_mbuf *local_bufs[MAX_PKT_BURST];
+	struct rte_mbuf *ring_bufs[MAX_APP_WORKERS][MAX_PKT_BURST];
+	uint16_t ring_counts[MAX_APP_WORKERS];
+	uint16_t local_count;
+	uint16_t rr_slot = 0;
+	uint64_t prev_tsc = rte_rdtsc();
+	const unsigned int main_lcore = rte_lcore_id();
+
+	printf("server dispatcher lcore=%u port=%u rxq=%u workers=%u\n",
+		main_lcore, main_app->port_id, main_app->rx_queue_id, worker_count);
+
+	while (!force_quit) {
+		const uint64_t cur_tsc = rte_rdtsc();
+		uint16_t nb_rx;
+
+		maybe_print_aggregate_stats(cur_tsc, &prev_tsc);
+		nb_rx = rte_eth_rx_burst(main_app->port_id, 0, rx_bufs,
+			server_conf.burst_size);
+		if (nb_rx == 0)
+			continue;
+
+		memset(ring_counts, 0, sizeof(ring_counts));
+		local_count = 0;
+		for (uint16_t i = 0; i < nb_rx; i++) {
+			const uint16_t slot = rr_slot++ % worker_count;
+			const unsigned int target_lcore = worker_lcores[slot];
+
+			if (target_lcore == main_lcore) {
+				local_bufs[local_count++] = rx_bufs[i];
+			} else {
+				ring_bufs[slot][ring_counts[slot]++] = rx_bufs[i];
+			}
+		}
+
+		if (local_count != 0)
+			process_echo_burst(main_app, local_bufs, local_count);
+
+		for (uint16_t slot = 0; slot < worker_count; slot++) {
+			struct app *target_app;
+			unsigned int target_lcore;
+			unsigned int enqueued;
+			uint16_t count;
+
+			count = ring_counts[slot];
+			if (count == 0)
+				continue;
+			target_lcore = worker_lcores[slot];
+			if (target_lcore == main_lcore)
+				continue;
+			target_app = &lcore_apps[target_lcore];
+			enqueued = rte_ring_enqueue_burst(worker_rings[target_lcore],
+				(void * const *)ring_bufs[slot], count, NULL);
+			if (enqueued < count)
+				free_dropped_dispatch(target_app, ring_bufs[slot], enqueued,
+					count - enqueued);
+		}
+	}
+
+	return 0;
+}
+
+static int server_sw_worker_main(void)
+{
+	struct app *worker_app = &lcore_apps[rte_lcore_id()];
+	struct rte_mbuf *bufs[MAX_PKT_BURST];
+
+	printf("server worker lcore=%u txq=%u ring=%s\n",
+		rte_lcore_id(), worker_app->tx_queue_id,
+		worker_rings[rte_lcore_id()] != NULL ? "on" : "off");
+
+	while (!force_quit) {
+		uint16_t nb_rx;
+
+		nb_rx = (uint16_t)rte_ring_dequeue_burst(worker_rings[rte_lcore_id()],
+			(void **)bufs, MAX_PKT_BURST, NULL);
+		if (nb_rx == 0)
+			continue;
+		process_echo_burst(worker_app, bufs, nb_rx);
+	}
+
+	return 0;
+}
+
+static int server_worker_main(__rte_unused void *arg)
+{
+	const unsigned int lcore_id = rte_lcore_id();
+
+	if (!lcore_enabled[lcore_id])
+		return 0;
+	if (!use_sw_fanout)
+		return server_poll_mode_main();
+	if (lcore_id == rte_get_main_lcore())
+		return server_sw_dispatch_main();
+	return server_sw_worker_main();
 }
 
 void server_app_run(void)
@@ -169,7 +297,7 @@ void server_app_run(void)
 
 int server_app_init(int argc, char **argv)
 {
-	unsigned int lcores[MAX_APP_WORKERS];
+	char ring_name[64];
 	int ret;
 
 	ret = parse_server_args(argc, argv, &app, &server_conf);
@@ -178,8 +306,12 @@ int server_app_init(int argc, char **argv)
 
 	memset(lcore_enabled, 0, sizeof(lcore_enabled));
 	memset(lcore_apps, 0, sizeof(lcore_apps));
+	memset(worker_rings, 0, sizeof(worker_rings));
+	memset(worker_lcores, 0, sizeof(worker_lcores));
+	for (unsigned int i = 0; i < RTE_MAX_LCORE; i++)
+		lcore_slot[i] = UINT16_MAX;
 
-	worker_count = app_get_enabled_lcores(lcores, MAX_APP_WORKERS);
+	worker_count = app_get_enabled_lcores(worker_lcores, MAX_APP_WORKERS);
 	if (worker_count == 0)
 		app_exit(&app, "no enabled lcores found\n");
 
@@ -188,15 +320,26 @@ int server_app_init(int argc, char **argv)
 	if (init_runtime(&app) < 0)
 		app_exit(&app, NULL);
 
+	use_sw_fanout = worker_count > 1 && !app.rss_enabled;
 	for (uint16_t i = 0; i < worker_count; i++) {
-		const unsigned int lcore_id = lcores[i];
+		const unsigned int lcore_id = worker_lcores[i];
 
 		lcore_enabled[lcore_id] = true;
+		lcore_slot[lcore_id] = i;
 		init_worker_app(&lcore_apps[lcore_id], &app, i);
 		lcore_apps[lcore_id].timer_period_cycles = 0;
+		if (use_sw_fanout && lcore_id != rte_get_main_lcore()) {
+			snprintf(ring_name, sizeof(ring_name), "srv_ring_%u", lcore_id);
+			worker_rings[lcore_id] = rte_ring_create(ring_name,
+				SERVER_SW_RING_SIZE, rte_socket_id(), RING_F_SP_ENQ | RING_F_SC_DEQ);
+			if (worker_rings[lcore_id] == NULL)
+				app_exit(&app, "failed to create software fanout ring\n");
+		}
 		printf("server map lcore=%u rxq=%u txq=%u\n", lcore_id, i, i);
 	}
 
+	if (use_sw_fanout)
+		printf("server using software fanout because RSS is unavailable\n");
 	printf("server using %u lcores and %u queue pairs\n",
 		worker_count, worker_count);
 	return 0;

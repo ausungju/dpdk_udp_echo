@@ -56,6 +56,13 @@ static void write_stats_row(FILE *fp, const char *timestamp, const char *scope,
 		curr->dropped, curr->echoed, curr->ignored,
 		curr->requests, curr->replies,
 		rx_pps, tx_pps, rx_mbps, tx_mbps);
+
+	printf("%s scope=%s lcore=%d port=%u rxq=%u txq=%u "
+		"rx=%" PRIu64 " tx=%" PRIu64 " drop=%" PRIu64
+		" rx_pps=%.0f tx_pps=%.0f rx_mbps=%.2f tx_mbps=%.2f\n",
+		timestamp, scope, lcore_id, port_id, rxq, txq,
+		curr->rx, curr->tx, curr->dropped,
+		rx_pps, tx_pps, rx_mbps, tx_mbps);
 }
 
 void print_stats(struct app *app, const struct app *apps,
