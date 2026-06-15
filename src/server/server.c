@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include <rte_byteorder.h>
@@ -26,6 +27,14 @@ static unsigned int worker_lcores[MAX_APP_WORKERS];
 static uint16_t lcore_slot[RTE_MAX_LCORE];
 static uint16_t worker_count;
 static bool use_sw_fanout;
+
+enum server_mode_override {
+	SERVER_MODE_AUTO = 0,
+	SERVER_MODE_SW_FANOUT_ON,
+	SERVER_MODE_SW_FANOUT_OFF,
+};
+
+static enum server_mode_override server_mode = SERVER_MODE_AUTO;
 
 static bool prepare_echo_packet(struct app *worker_app, struct rte_mbuf *m)
 {
@@ -88,6 +97,28 @@ static void maybe_print_aggregate_stats(uint64_t cur_tsc, uint64_t *prev_tsc)
 	aggregate_stats(&app.stats, lcore_apps, RTE_MAX_LCORE);
 	print_stats(&app, lcore_apps, lcore_enabled);
 }
+
+static void load_server_mode(void)
+{
+	const char *value = getenv("ECHO_SW_FANOUT");
+
+	if (value == NULL || strcmp(value, "") == 0 || strcmp(value, "auto") == 0) {
+		server_mode = SERVER_MODE_AUTO;
+		return;
+	}
+	if (strcmp(value, "on") == 0) {
+		server_mode = SERVER_MODE_SW_FANOUT_ON;
+		return;
+	}
+	if (strcmp(value, "off") == 0) {
+		server_mode = SERVER_MODE_SW_FANOUT_OFF;
+		return;
+	}
+
+	fprintf(stderr, "invalid ECHO_SW_FANOUT=%s, expected auto|on|off\n", value);
+	app_exit(&app, NULL);
+}
+
 
 static void process_echo_burst(struct app *worker_app,
 	struct rte_mbuf **bufs, uint16_t nb_rx)
@@ -304,6 +335,8 @@ int server_app_init(int argc, char **argv)
 	if (ret != 0)
 		return ret;
 
+	load_server_mode();
+
 	memset(lcore_enabled, 0, sizeof(lcore_enabled));
 	memset(lcore_apps, 0, sizeof(lcore_apps));
 	memset(worker_rings, 0, sizeof(worker_rings));
@@ -320,7 +353,18 @@ int server_app_init(int argc, char **argv)
 	if (init_runtime(&app) < 0)
 		app_exit(&app, NULL);
 
-	use_sw_fanout = worker_count > 1 && !app.rss_enabled;
+	switch (server_mode) {
+	case SERVER_MODE_SW_FANOUT_ON:
+		use_sw_fanout = worker_count > 1;
+		break;
+	case SERVER_MODE_SW_FANOUT_OFF:
+		use_sw_fanout = false;
+		break;
+	case SERVER_MODE_AUTO:
+	default:
+		use_sw_fanout = worker_count > 1 && !app.rss_enabled;
+		break;
+	}
 	for (uint16_t i = 0; i < worker_count; i++) {
 		const unsigned int lcore_id = worker_lcores[i];
 
@@ -339,7 +383,13 @@ int server_app_init(int argc, char **argv)
 	}
 
 	if (use_sw_fanout)
-		printf("server using software fanout because RSS is unavailable\n");
+		printf("server mode: software fanout (%s)\n",
+			server_mode == SERVER_MODE_SW_FANOUT_ON ? "forced" : "auto");
+	else
+		printf("server mode: direct polling (%s)\n",
+			server_mode == SERVER_MODE_SW_FANOUT_OFF ? "forced" : "auto");
+	if (!app.rss_enabled && !use_sw_fanout && worker_count > 1)
+		printf("server warning: RSS unavailable and software fanout disabled, traffic may stay on one core\n");
 	printf("server using %u lcores and %u queue pairs\n",
 		worker_count, worker_count);
 	return 0;

@@ -2,11 +2,12 @@
 set -euo pipefail
 
 WORKSPACE=${WORKSPACE:-$HOME/workspace/dpdk/echo}
-LCORES=${LCORES:-1,2,3,4,5,6,7,8}
+LCORES=${LCORES:-1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17}
 PCI_ADDR=${PCI_ADDR:-0000:01:00.0}
 PORT=${PORT:-0}
 BURST=${BURST:-32}
 TIMER_PERIOD=${TIMER_PERIOD:-1}
+SERVER_MODE=${SERVER_MODE:-auto}
 
 cd "$WORKSPACE"
 make
@@ -14,6 +15,6 @@ make
 mkdir -p logs
 
 echo "[run_server] Starting server"
-echo "[run_server] LCORES=$LCORES PCI_ADDR=$PCI_ADDR PORT=$PORT BURST=$BURST TIMER_PERIOD=$TIMER_PERIOD"
-exec sudo "$WORKSPACE/build/server" -l "$LCORES" -a "$PCI_ADDR" -- \
+echo "[run_server] LCORES=$LCORES PCI_ADDR=$PCI_ADDR PORT=$PORT BURST=$BURST TIMER_PERIOD=$TIMER_PERIOD SERVER_MODE=$SERVER_MODE"
+exec sudo env ECHO_SW_FANOUT="$SERVER_MODE" "$WORKSPACE/build/server" -l "$LCORES" -a "$PCI_ADDR" -- \
     --port "$PORT" --burst "$BURST" -T "$TIMER_PERIOD"
