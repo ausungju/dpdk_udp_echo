@@ -77,7 +77,7 @@ static void maybe_print_aggregate_stats(uint64_t cur_tsc, uint64_t *prev_tsc)
 
 	*prev_tsc = cur_tsc;
 	aggregate_stats(&app.stats, lcore_apps, RTE_MAX_LCORE);
-	print_stats(&app);
+	print_stats(&app, lcore_apps, lcore_enabled);
 }
 
 static int server_worker_main(__rte_unused void *arg)
@@ -163,7 +163,7 @@ void server_app_run(void)
 	}
 
 	aggregate_stats(&app.stats, lcore_apps, RTE_MAX_LCORE);
-	print_stats(&app);
+	print_stats(&app, lcore_apps, lcore_enabled);
 	stop_port(&app);
 }
 

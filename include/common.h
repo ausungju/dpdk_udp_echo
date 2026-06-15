@@ -74,7 +74,8 @@ void aggregate_stats(struct stats *dst, const struct app *apps,
 	uint16_t count);
 int init_runtime(struct app *app);
 void app_exit(struct app *app, const char *message);
-void print_stats(struct app *app);
+void print_stats(struct app *app, const struct app *apps,
+	const bool *lcore_enabled);
 void stop_port(struct app *app);
 void free_unsent_mbufs(struct app *app,
 	struct rte_mbuf **bufs, uint16_t nb_tx, uint16_t nb_total);
@@ -95,16 +96,6 @@ static inline void stats_inc_u64(uint64_t *value)
 static inline uint64_t stats_read_u64(const uint64_t *value)
 {
 	return __atomic_load_n(value, __ATOMIC_RELAXED);
-}
-
-static inline void maybe_print_periodic_stats(struct app *app,
-	uint64_t cur_tsc, uint64_t *prev_tsc)
-{
-	if (app->timer_period_cycles != 0 &&
-			cur_tsc - *prev_tsc > app->timer_period_cycles) {
-		*prev_tsc = cur_tsc;
-		print_stats(app);
-	}
 }
 
 static inline bool mbuf_has_contiguous_headers(const struct rte_mbuf *m, uint32_t len)
