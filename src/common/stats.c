@@ -39,6 +39,8 @@ static void write_stats_row(FILE *fp, const char *timestamp, const char *scope,
 	double tx_pps = 0.0;
 	double rx_mbps = 0.0;
 	double tx_mbps = 0.0;
+	double rx_wire_gbps = 0.0;
+	double tx_wire_gbps = 0.0;
 
 	if (now_tsc > prev_tsc)
 		seconds = (double)(now_tsc - prev_tsc) / rte_get_tsc_hz();
@@ -47,22 +49,27 @@ static void write_stats_row(FILE *fp, const char *timestamp, const char *scope,
 		tx_pps = (curr->tx - prev->tx) / seconds;
 		rx_mbps = ((curr->rx_bytes - prev->rx_bytes) * 8.0) / seconds / 1000000.0;
 		tx_mbps = ((curr->tx_bytes - prev->tx_bytes) * 8.0) / seconds / 1000000.0;
+		rx_wire_gbps = (((curr->rx_bytes - prev->rx_bytes) +
+				((curr->rx - prev->rx) * 24.0)) * 8.0) / seconds / 1000000000.0;
+		tx_wire_gbps = (((curr->tx_bytes - prev->tx_bytes) +
+				((curr->tx - prev->tx) * 24.0)) * 8.0) / seconds / 1000000000.0;
 	}
 
 	fprintf(fp,
-		"%s,%s,%d,%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.0f,%.0f,%.2f,%.2f\n",
+		"%s,%s,%d,%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.0f,%.0f,%.2f,%.2f,%.3f,%.3f\n",
 		timestamp, scope, lcore_id, port_id, rxq, txq,
 		curr->rx, curr->tx, curr->rx_bytes, curr->tx_bytes,
 		curr->dropped, curr->echoed, curr->ignored,
 		curr->requests, curr->replies,
-		rx_pps, tx_pps, rx_mbps, tx_mbps);
+		rx_pps, tx_pps, rx_mbps, tx_mbps, rx_wire_gbps, tx_wire_gbps);
 
 	printf("%s scope=%s lcore=%d port=%u rxq=%u txq=%u "
 		"rx=%" PRIu64 " tx=%" PRIu64 " drop=%" PRIu64
-		" rx_pps=%.0f tx_pps=%.0f rx_mbps=%.2f tx_mbps=%.2f\n",
+		" rx_pps=%.0f tx_pps=%.0f rx_mbps=%.2f tx_mbps=%.2f"
+		" rx_wire_gbps=%.3f tx_wire_gbps=%.3f\n",
 		timestamp, scope, lcore_id, port_id, rxq, txq,
 		curr->rx, curr->tx, curr->dropped,
-		rx_pps, tx_pps, rx_mbps, tx_mbps);
+		rx_pps, tx_pps, rx_mbps, tx_mbps, rx_wire_gbps, tx_wire_gbps);
 }
 
 void print_stats(struct app *app, const struct app *apps,
@@ -88,7 +95,7 @@ void print_stats(struct app *app, const struct app *apps,
 	}
 
 	if (!header_printed) {
-		fprintf(fp, "timestamp,scope,lcore,port,rxq,txq,rx,tx,rx_bytes,tx_bytes,drop,echoed,ignored,requests,replies,rx_pps,tx_pps,rx_mbps,tx_mbps\n");
+		fprintf(fp, "timestamp,scope,lcore,port,rxq,txq,rx,tx,rx_bytes,tx_bytes,drop,echoed,ignored,requests,replies,rx_pps,tx_pps,rx_mbps,tx_mbps,rx_wire_gbps,tx_wire_gbps\n");
 		printf("[INFO] CSV file created: %s\n", filename);
 		header_printed = 1;
 	}

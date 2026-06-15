@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WORKSPACE=${WORKSPACE:-$HOME/workspace/dpdk/echo}
-LCORES=${LCORES:-1,2,3,4}
+LCORES=${LCORES:-1,2,3,4,5,6,7,8}
 PCI_ADDR=${PCI_ADDR:-0000:01:00.0}
 PORT=${PORT:-0}
 BURST=${BURST:-32}
