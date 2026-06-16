@@ -5,6 +5,7 @@
 
 #include <rte_errno.h>
 #include <rte_lcore.h>
+#include <rte_pause.h>
 
 #include "common.h"
 
@@ -62,6 +63,31 @@ void aggregate_stats(struct stats *dst, const struct app *apps,
 		dst->requests += stats_read_u64(&apps[i].stats.requests);
 		dst->replies += stats_read_u64(&apps[i].stats.replies);
 	}
+}
+
+uint16_t tx_burst_with_retry(uint16_t port_id, uint16_t queue_id,
+	struct rte_mbuf **bufs, uint16_t nb_total)
+{
+	uint16_t nb_done = 0;
+	uint16_t retries = 0;
+
+	while (nb_done < nb_total) {
+		uint16_t nb_tx = rte_eth_tx_burst(port_id, queue_id,
+			&bufs[nb_done], nb_total - nb_done);
+
+		nb_done += nb_tx;
+		if (nb_done == nb_total)
+			break;
+		if (nb_tx != 0) {
+			retries = 0;
+			continue;
+		}
+		if (++retries >= TX_BURST_RETRY)
+			break;
+		rte_pause();
+	}
+
+	return nb_done;
 }
 
 void free_unsent_mbufs(struct app *app,

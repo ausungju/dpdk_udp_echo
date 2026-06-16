@@ -17,8 +17,9 @@
 #include <rte_mempool.h>
 
 #define MAX_PKT_BURST 64
-#define RX_DESC_DEFAULT 1024
-#define TX_DESC_DEFAULT 1024
+#define RX_DESC_DEFAULT 2048
+#define TX_DESC_DEFAULT 2048
+#define TX_BURST_RETRY 8
 #define MEMPOOL_CACHE_SIZE 256
 #define NUM_MBUFS 65535
 #define MAX_TIMER_PERIOD 86400
@@ -46,6 +47,7 @@ struct app {
 	bool promiscuous_on;
 	bool rss_enabled;
 	uint32_t link_speed_mbps;
+	uint32_t target_rate_mbps;
 	uint64_t timer_period_secs;
 	uint64_t timer_period_cycles;
 	uint64_t prev_stats_tsc;
@@ -79,6 +81,8 @@ void app_exit(struct app *app, const char *message);
 void print_stats(struct app *app, const struct app *apps,
 	const bool *lcore_enabled);
 void stop_port(struct app *app);
+uint16_t tx_burst_with_retry(uint16_t port_id, uint16_t queue_id,
+	struct rte_mbuf **bufs, uint16_t nb_total);
 void free_unsent_mbufs(struct app *app,
 	struct rte_mbuf **bufs, uint16_t nb_tx, uint16_t nb_total);
 

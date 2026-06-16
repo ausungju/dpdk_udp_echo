@@ -161,8 +161,8 @@ static void process_echo_burst(struct app *worker_app,
 	if (nb_echo == 0)
 		return;
 
-	nb_tx = rte_eth_tx_burst(worker_app->port_id, worker_app->tx_queue_id,
-		bufs, nb_echo);
+	nb_tx = tx_burst_with_retry(worker_app->port_id,
+		worker_app->tx_queue_id, bufs, nb_echo);
 	if (nb_tx > nb_echo)
 		nb_tx = nb_echo;
 	stats_add_u64(&worker_app->stats.tx, nb_tx);

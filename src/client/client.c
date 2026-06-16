@@ -124,8 +124,8 @@ static void transmit_requests(struct app *worker_app, struct rte_mbuf **bufs)
 		memcpy(data, request_template, request_pkt_len);
 	}
 
-	nb_tx = rte_eth_tx_burst(worker_app->port_id, worker_app->tx_queue_id,
-		bufs, nb_build);
+	nb_tx = tx_burst_with_retry(worker_app->port_id,
+		worker_app->tx_queue_id, bufs, nb_build);
 	stats_add_u64(&worker_app->stats.tx, nb_tx);
 	stats_add_u64(&worker_app->stats.tx_bytes, (uint64_t)nb_tx * request_pkt_len);
 	stats_add_u64(&worker_app->stats.requests, nb_tx);
@@ -257,6 +257,7 @@ int client_app_init(int argc, char **argv)
 
 	app.rx_queue_id = worker_count - 1;
 	app.tx_queue_id = worker_count - 1;
+	app.target_rate_mbps = client_conf.rate_mbps;
 	if (init_runtime(&app) < 0)
 		app_exit(&app, NULL);
 
