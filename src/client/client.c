@@ -210,7 +210,10 @@ static int client_worker_main(__rte_unused void *arg)
 				rte_pause();
 				continue;
 			}
-			next_tx_tsc = tx_tsc + pacing_cycles;
+			next_tx_tsc += pacing_cycles;
+			if (tx_tsc > next_tx_tsc &&
+					tx_tsc - next_tx_tsc > pacing_cycles)
+				next_tx_tsc = tx_tsc + pacing_cycles;
 		}
 
 		transmit_requests(worker_app, bufs);
