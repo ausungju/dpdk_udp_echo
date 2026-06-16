@@ -11,6 +11,7 @@
 #include <rte_ip.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
+#include <rte_pause.h>
 #include <rte_udp.h>
 
 #include "client.h"
@@ -149,12 +150,14 @@ static int client_worker_main(__rte_unused void *arg)
 		nb_rx = rte_eth_rx_burst(worker_app->port_id, worker_app->rx_queue_id,
 			bufs, client_conf.burst_size);
 		if (nb_rx != 0) {
+			uint64_t rx_bytes = 0;
+
 			stats_add_u64(&worker_app->stats.rx, nb_rx);
 			for (uint16_t i = 0; i < nb_rx; i++) {
-				stats_add_u64(&worker_app->stats.rx_bytes,
-					rte_pktmbuf_pkt_len(bufs[i]));
+				rx_bytes += rte_pktmbuf_pkt_len(bufs[i]);
 				rte_pktmbuf_free(bufs[i]);
 			}
+			stats_add_u64(&worker_app->stats.rx_bytes, rx_bytes);
 			stats_add_u64(&worker_app->stats.replies, nb_rx);
 		}
 
@@ -167,6 +170,7 @@ static int client_worker_main(__rte_unused void *arg)
 			} else if (cur_tsc > finish_deadline) {
 				force_quit = true;
 			}
+			rte_pause();
 			continue;
 		}
 

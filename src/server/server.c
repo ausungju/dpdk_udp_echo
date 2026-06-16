@@ -10,6 +10,7 @@
 #include <rte_ip.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
+#include <rte_pause.h>
 #include <rte_ring.h>
 #include <rte_udp.h>
 
@@ -126,26 +127,36 @@ static void process_echo_burst(struct app *worker_app,
 	uint16_t echo_len[MAX_PKT_BURST];
 	uint16_t nb_echo = 0;
 	uint16_t nb_tx;
+	uint16_t echoed = 0;
+	uint16_t ignored = 0;
+	uint64_t rx_bytes = 0;
 	uint64_t echo_bytes = 0;
+	uint64_t tx_bytes = 0;
 
 	if (nb_rx == 0)
 		return;
 
-	stats_add_u64(&worker_app->stats.rx, nb_rx);
 	for (uint16_t i = 0; i < nb_rx; i++) {
 		const uint16_t len = rte_pktmbuf_pkt_len(bufs[i]);
 
-		stats_add_u64(&worker_app->stats.rx_bytes, len);
+		rx_bytes += len;
 		if (prepare_echo_packet(worker_app, bufs[i])) {
 			echo_len[nb_echo] = len;
 			echo_bytes += len;
 			bufs[nb_echo++] = bufs[i];
-			stats_inc_u64(&worker_app->stats.echoed);
+			echoed++;
 		} else {
-			stats_inc_u64(&worker_app->stats.ignored);
+			ignored++;
 			rte_pktmbuf_free(bufs[i]);
 		}
 	}
+
+	stats_add_u64(&worker_app->stats.rx, nb_rx);
+	stats_add_u64(&worker_app->stats.rx_bytes, rx_bytes);
+	if (echoed != 0)
+		stats_add_u64(&worker_app->stats.echoed, echoed);
+	if (ignored != 0)
+		stats_add_u64(&worker_app->stats.ignored, ignored);
 
 	if (nb_echo == 0)
 		return;
@@ -156,11 +167,13 @@ static void process_echo_burst(struct app *worker_app,
 		nb_tx = nb_echo;
 	stats_add_u64(&worker_app->stats.tx, nb_tx);
 	if (nb_tx == nb_echo) {
-		stats_add_u64(&worker_app->stats.tx_bytes, echo_bytes);
+		tx_bytes = echo_bytes;
 	} else {
 		for (uint16_t i = 0; i < nb_tx; i++)
-			stats_add_u64(&worker_app->stats.tx_bytes, echo_len[i]);
+			tx_bytes += echo_len[i];
 	}
+	if (tx_bytes != 0)
+		stats_add_u64(&worker_app->stats.tx_bytes, tx_bytes);
 
 	free_unsent_mbufs(worker_app, bufs, nb_tx, nb_echo);
 }
@@ -199,8 +212,10 @@ static int server_poll_mode_main(void)
 
 		nb_rx = rte_eth_rx_burst(worker_app->port_id, worker_app->rx_queue_id,
 			bufs, server_conf.burst_size);
-		if (nb_rx == 0)
+		if (nb_rx == 0) {
+			rte_pause();
 			continue;
+		}
 		process_echo_burst(worker_app, bufs, nb_rx);
 	}
 
@@ -229,8 +244,10 @@ static int server_sw_dispatch_main(void)
 		maybe_print_aggregate_stats(cur_tsc, &prev_tsc);
 		nb_rx = rte_eth_rx_burst(main_app->port_id, 0, rx_bufs,
 			server_conf.burst_size);
-		if (nb_rx == 0)
+		if (nb_rx == 0) {
+			rte_pause();
 			continue;
+		}
 
 		memset(ring_counts, 0, sizeof(ring_counts));
 		local_count = 0;
@@ -286,8 +303,10 @@ static int server_sw_worker_main(void)
 
 		nb_rx = (uint16_t)rte_ring_dequeue_burst(worker_rings[rte_lcore_id()],
 			(void **)bufs, MAX_PKT_BURST, NULL);
-		if (nb_rx == 0)
+		if (nb_rx == 0) {
+			rte_pause();
 			continue;
+		}
 		process_echo_burst(worker_app, bufs, nb_rx);
 	}
 

@@ -45,6 +45,7 @@ struct app {
 	bool port_started;
 	bool promiscuous_on;
 	bool rss_enabled;
+	uint32_t link_speed_mbps;
 	uint64_t timer_period_secs;
 	uint64_t timer_period_cycles;
 	uint64_t prev_stats_tsc;

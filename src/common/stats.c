@@ -32,7 +32,7 @@ static struct stats snapshot_stats(const struct app *app)
 static void write_stats_row(FILE *fp, const char *timestamp, const char *scope,
 	int lcore_id, uint16_t port_id, uint16_t rxq, uint16_t txq,
 	const struct stats *curr, const struct stats *prev,
-	uint64_t now_tsc, uint64_t prev_tsc)
+	uint64_t now_tsc, uint64_t prev_tsc, uint32_t link_speed_mbps)
 {
 	double seconds = 0.0;
 	double rx_pps = 0.0;
@@ -41,6 +41,9 @@ static void write_stats_row(FILE *fp, const char *timestamp, const char *scope,
 	double tx_mbps = 0.0;
 	double rx_wire_gbps = 0.0;
 	double tx_wire_gbps = 0.0;
+	double rx_link_util = 0.0;
+	double tx_link_util = 0.0;
+	double link_gbps = 0.0;
 
 	if (now_tsc > prev_tsc)
 		seconds = (double)(now_tsc - prev_tsc) / rte_get_tsc_hz();
@@ -54,22 +57,29 @@ static void write_stats_row(FILE *fp, const char *timestamp, const char *scope,
 		tx_wire_gbps = (((curr->tx_bytes - prev->tx_bytes) +
 				((curr->tx - prev->tx) * 24.0)) * 8.0) / seconds / 1000000000.0;
 	}
+	if (link_speed_mbps != 0) {
+		link_gbps = link_speed_mbps / 1000.0;
+		rx_link_util = (rx_wire_gbps / link_gbps) * 100.0;
+		tx_link_util = (tx_wire_gbps / link_gbps) * 100.0;
+	}
 
 	fprintf(fp,
-		"%s,%s,%d,%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.0f,%.0f,%.2f,%.2f,%.3f,%.3f\n",
+		"%s,%s,%d,%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.0f,%.0f,%.2f,%.2f,%.3f,%.3f,%.2f,%.2f\n",
 		timestamp, scope, lcore_id, port_id, rxq, txq,
 		curr->rx, curr->tx, curr->rx_bytes, curr->tx_bytes,
 		curr->dropped, curr->echoed, curr->ignored,
 		curr->requests, curr->replies,
-		rx_pps, tx_pps, rx_mbps, tx_mbps, rx_wire_gbps, tx_wire_gbps);
+		rx_pps, tx_pps, rx_mbps, tx_mbps, rx_wire_gbps, tx_wire_gbps,
+		rx_link_util, tx_link_util);
 
 	printf("%s scope=%s lcore=%d port=%u rxq=%u txq=%u "
 		"rx=%" PRIu64 " tx=%" PRIu64 " drop=%" PRIu64
 		" rx_pps=%.0f tx_pps=%.0f rx_mbps=%.2f tx_mbps=%.2f"
-		" rx_wire_gbps=%.3f tx_wire_gbps=%.3f\n",
+		" rx_wire_gbps=%.3f tx_wire_gbps=%.3f rx_link_util=%.2f%% tx_link_util=%.2f%%\n",
 		timestamp, scope, lcore_id, port_id, rxq, txq,
 		curr->rx, curr->tx, curr->dropped,
-		rx_pps, tx_pps, rx_mbps, tx_mbps, rx_wire_gbps, tx_wire_gbps);
+		rx_pps, tx_pps, rx_mbps, tx_mbps, rx_wire_gbps, tx_wire_gbps,
+		rx_link_util, tx_link_util);
 }
 
 void print_stats(struct app *app, const struct app *apps,
@@ -95,7 +105,7 @@ void print_stats(struct app *app, const struct app *apps,
 	}
 
 	if (!header_printed) {
-		fprintf(fp, "timestamp,scope,lcore,port,rxq,txq,rx,tx,rx_bytes,tx_bytes,drop,echoed,ignored,requests,replies,rx_pps,tx_pps,rx_mbps,tx_mbps,rx_wire_gbps,tx_wire_gbps\n");
+		fprintf(fp, "timestamp,scope,lcore,port,rxq,txq,rx,tx,rx_bytes,tx_bytes,drop,echoed,ignored,requests,replies,rx_pps,tx_pps,rx_mbps,tx_mbps,rx_wire_gbps,tx_wire_gbps,rx_link_util,tx_link_util\n");
 		printf("[INFO] CSV file created: %s\n", filename);
 		header_printed = 1;
 	}
@@ -103,7 +113,7 @@ void print_stats(struct app *app, const struct app *apps,
 	strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeinfo);
 	write_stats_row(fp, timestamp, "aggregate", -1, app->port_id,
 		UINT16_MAX, UINT16_MAX, &snapshot, &app->prev_stats,
-		now_tsc, app->prev_stats_tsc);
+		now_tsc, app->prev_stats_tsc, app->link_speed_mbps);
 
 	RTE_LCORE_FOREACH(lcore_id) {
 		struct stats lcore_snapshot;
@@ -117,7 +127,7 @@ void print_stats(struct app *app, const struct app *apps,
 			worker_app->port_id, worker_app->rx_queue_id,
 			worker_app->tx_queue_id, &lcore_snapshot,
 			&worker_app->prev_stats, now_tsc,
-			worker_app->prev_stats_tsc);
+			worker_app->prev_stats_tsc, worker_app->link_speed_mbps);
 		worker_app->prev_stats = lcore_snapshot;
 		worker_app->prev_stats_tsc = now_tsc;
 	}

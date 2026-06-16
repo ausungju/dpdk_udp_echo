@@ -78,6 +78,7 @@ static int init_port(struct app *app)
 {
 	struct rte_eth_conf port_conf = {0};
 	struct rte_eth_dev_info dev_info;
+	struct rte_eth_link link = {0};
 	struct rte_eth_rxconf rxconf;
 	struct rte_eth_txconf txconf;
 	uint16_t nb_rxd = RX_DESC_DEFAULT;
@@ -162,9 +163,15 @@ static int init_port(struct app *app)
 	if (ret != 0)
 		return ret;
 
-	printf("port %u started, rxq %u, txq %u, RSS %s, MAC " RTE_ETHER_ADDR_PRT_FMT "\n",
+	if (rte_eth_link_get(app->port_id, &link) == 0 && link.link_status)
+		app->link_speed_mbps = link.link_speed;
+	else
+		app->link_speed_mbps = 0;
+
+	printf("port %u started, rxq %u, txq %u, RSS %s, link %u Mbps, MAC " RTE_ETHER_ADDR_PRT_FMT "\n",
 		app->port_id, rx_queue_count, tx_queue_count,
 		app->rss_enabled ? "on" : "off",
+		app->link_speed_mbps,
 		RTE_ETHER_ADDR_BYTES(&app->port_mac));
 	return 0;
 }
