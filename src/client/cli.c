@@ -23,6 +23,7 @@ static void usage(const char *prgname, const struct client_conf *conf)
 	printf("  --burst N: TX/RX burst size, 1-%u (default %u)\n"
 	       "  --payload-len N: generated payload length, 0-%u (default %u)\n"
 	       "  --duration SEC: transmit duration, 0 means unlimited (default 0)\n"
+	       "  --rate-mbps N: target L1 wire rate in Mbps, 0 means unlimited (default 0)\n"
 	       "  --dst-mac MAC|broadcast: destination Ethernet address (default broadcast)\n"
 	       "  -h: show this help\n",
 		MAX_PKT_BURST, conf->burst_size,
@@ -44,6 +45,7 @@ int parse_client_args(int argc, char **argv, struct app *app,
 		conf->dst_mac.addr_bytes[i] = 0xff;
 	conf->payload_len = DEFAULT_CLIENT_PAYLOAD_LEN;
 	conf->burst_size = MAX_PKT_BURST;
+	conf->rate_mbps = 0;
 	conf->duration_secs = 0;
 	fill_payload_pattern(conf, conf->payload_len);
 	static const char short_options[] = "hp:PT:";
@@ -55,6 +57,7 @@ int parse_client_args(int argc, char **argv, struct app *app,
 		OPT_DST_MAC,
 		OPT_PAYLOAD_LEN,
 		OPT_DURATION,
+		OPT_RATE_MBPS,
 	};
 
 	static const struct option long_options[] = {
@@ -63,6 +66,7 @@ int parse_client_args(int argc, char **argv, struct app *app,
 		{ "dst-mac", required_argument, NULL, OPT_DST_MAC },
 		{ "payload-len", required_argument, NULL, OPT_PAYLOAD_LEN },
 		{ "duration", required_argument, NULL, OPT_DURATION },
+		{ "rate-mbps", required_argument, NULL, OPT_RATE_MBPS },
 		{ NULL, 0, NULL, 0 },
 	};
 
@@ -123,6 +127,12 @@ int parse_client_args(int argc, char **argv, struct app *app,
 				app_exit(app, "invalid duration\n");
 			}
 			conf->duration_secs = value64;
+			break;
+		case OPT_RATE_MBPS:
+			if (parse_u32(optarg, 0, UINT32_MAX, &value32) < 0) {
+				app_exit(app, "invalid rate-mbps\n");
+			}
+			conf->rate_mbps = value32;
 			break;
 		default:
 			usage(argv[0], conf);

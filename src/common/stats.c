@@ -71,16 +71,86 @@ static void write_stats_row(FILE *fp, const char *timestamp, const char *scope,
 		curr->requests, curr->replies,
 		rx_pps, tx_pps, rx_mbps, tx_mbps, rx_wire_gbps, tx_wire_gbps,
 		rx_link_util, tx_link_util);
-
-	printf("%s scope=%s lcore=%d port=%u rxq=%u txq=%u "
-		"rx=%" PRIu64 " tx=%" PRIu64 " drop=%" PRIu64
-		" rx_pps=%.0f tx_pps=%.0f rx_mbps=%.2f tx_mbps=%.2f"
-		" rx_wire_gbps=%.3f tx_wire_gbps=%.3f rx_link_util=%.2f%% tx_link_util=%.2f%%\n",
-		timestamp, scope, lcore_id, port_id, rxq, txq,
-		curr->rx, curr->tx, curr->dropped,
-		rx_pps, tx_pps, rx_mbps, tx_mbps, rx_wire_gbps, tx_wire_gbps,
-		rx_link_util, tx_link_util);
 }
+
+static void print_console_summary(const char *timestamp, uint16_t port_id,
+	const struct stats *curr, const struct stats *prev,
+	uint64_t now_tsc, uint64_t prev_tsc, uint32_t link_speed_mbps)
+{
+	const double wire_overhead_bytes = 24.0;
+	double seconds = 0.0;
+	double rx_pps = 0.0;
+	double tx_pps = 0.0;
+	double rx_wire_gbps = 0.0;
+	double tx_wire_gbps = 0.0;
+	double rx_link_util = 0.0;
+	double tx_link_util = 0.0;
+	double link_gbps = 0.0;
+	double rx_gap_mbps = 0.0;
+	double tx_gap_mbps = 0.0;
+	double rx_pps_gap = 0.0;
+	double tx_pps_gap = 0.0;
+	double drop_ps = 0.0;
+	double tx_attempt_mpps = 0.0;
+	const char *tx_reason = "ok";
+	uint64_t rx_delta = curr->rx - prev->rx;
+	uint64_t tx_delta = curr->tx - prev->tx;
+	uint64_t rx_bytes_delta = curr->rx_bytes - prev->rx_bytes;
+	uint64_t tx_bytes_delta = curr->tx_bytes - prev->tx_bytes;
+	uint64_t drop_delta = curr->dropped - prev->dropped;
+
+	if (now_tsc > prev_tsc)
+		seconds = (double)(now_tsc - prev_tsc) / rte_get_tsc_hz();
+	if (seconds > 0.0) {
+		rx_pps = rx_delta / seconds;
+		tx_pps = tx_delta / seconds;
+		rx_wire_gbps = ((rx_bytes_delta + (rx_delta * wire_overhead_bytes)) *
+				8.0) / seconds / 1000000000.0;
+		tx_wire_gbps = ((tx_bytes_delta + (tx_delta * wire_overhead_bytes)) *
+				8.0) / seconds / 1000000000.0;
+		drop_ps = drop_delta / seconds;
+	}
+	if (link_speed_mbps != 0) {
+		link_gbps = link_speed_mbps / 1000.0;
+		rx_link_util = (rx_wire_gbps / link_gbps) * 100.0;
+		tx_link_util = (tx_wire_gbps / link_gbps) * 100.0;
+		rx_gap_mbps = link_speed_mbps - (rx_wire_gbps * 1000.0);
+		tx_gap_mbps = link_speed_mbps - (tx_wire_gbps * 1000.0);
+		if (rx_delta != 0) {
+			double avg_rx_wire_bytes = (rx_bytes_delta / (double)rx_delta) +
+				wire_overhead_bytes;
+			rx_pps_gap = ((link_speed_mbps * 1000000.0) /
+					(avg_rx_wire_bytes * 8.0)) - rx_pps;
+		}
+		if (tx_delta != 0) {
+			double avg_tx_wire_bytes = (tx_bytes_delta / (double)tx_delta) +
+				wire_overhead_bytes;
+			tx_pps_gap = ((link_speed_mbps * 1000000.0) /
+					(avg_tx_wire_bytes * 8.0)) - tx_pps;
+		}
+	}
+	if (rx_gap_mbps < 0.0)
+		rx_gap_mbps = 0.0;
+	if (tx_gap_mbps < 0.0)
+		tx_gap_mbps = 0.0;
+	if (rx_pps_gap < 0.0)
+		rx_pps_gap = 0.0;
+	if (tx_pps_gap < 0.0)
+		tx_pps_gap = 0.0;
+	tx_attempt_mpps = (tx_pps + drop_ps) / 1000000.0;
+	if (tx_gap_mbps > 0.0 && drop_ps > 0.0)
+		tx_reason = "tx_backpressure";
+	else if (tx_gap_mbps > 0.0)
+		tx_reason = "needs_more_pps";
+
+	printf("%s port=%u rx=%.3fG(%.2f%% gap=%.0fMbps/%.0fpps) "
+		"tx=%.3fG(%.2f%% gap=%.0fMbps/%.0fpps) "
+		"tx_attempt=%.2fMpps unsent/s=%.2fM reason=%s\n",
+		timestamp, port_id, rx_wire_gbps, rx_link_util, rx_gap_mbps,
+		rx_pps_gap, tx_wire_gbps, tx_link_util, tx_gap_mbps,
+		tx_pps_gap, tx_attempt_mpps, drop_ps / 1000000.0, tx_reason);
+}
+
 
 void print_stats(struct app *app, const struct app *apps,
 	const bool *lcore_enabled)
@@ -113,6 +183,8 @@ void print_stats(struct app *app, const struct app *apps,
 	strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeinfo);
 	write_stats_row(fp, timestamp, "aggregate", -1, app->port_id,
 		UINT16_MAX, UINT16_MAX, &snapshot, &app->prev_stats,
+		now_tsc, app->prev_stats_tsc, app->link_speed_mbps);
+	print_console_summary(timestamp, app->port_id, &snapshot, &app->prev_stats,
 		now_tsc, app->prev_stats_tsc, app->link_speed_mbps);
 
 	RTE_LCORE_FOREACH(lcore_id) {

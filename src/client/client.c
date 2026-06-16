@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -25,6 +26,28 @@ static uint8_t request_templates[RTE_MAX_LCORE][sizeof(struct rte_ether_hdr) +
 	sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr) + MAX_PAYLOAD];
 static uint16_t request_pkt_len;
 static uint16_t worker_count;
+
+static uint64_t client_pacing_cycles_per_burst(void)
+{
+	const double wire_overhead_bytes = 24.0;
+	double target_pps;
+	double worker_pps;
+	double cycles;
+
+	if (client_conf.rate_mbps == 0 || worker_count == 0)
+		return 0;
+
+	target_pps = (client_conf.rate_mbps * 1000000.0) /
+		((request_pkt_len + wire_overhead_bytes) * 8.0);
+	worker_pps = target_pps / worker_count;
+	if (worker_pps <= 0.0)
+		return 0;
+
+	cycles = (rte_get_tsc_hz() * (double)client_conf.burst_size) / worker_pps;
+	if (cycles < 1.0)
+		return 1;
+	return (uint64_t)(cycles + 0.5);
+}
 
 static void prepare_request_template(struct app *worker_app, uint8_t *template_buf)
 {
@@ -119,16 +142,22 @@ static int client_worker_main(__rte_unused void *arg)
 	uint64_t finish_deadline = 0;
 	const uint64_t hz = rte_get_tsc_hz();
 	const uint64_t finish_wait_tsc = hz * CLIENT_FINISH_WAIT_SECS;
+	uint64_t pacing_cycles = 0;
+	uint64_t next_tx_tsc = 0;
 	const unsigned int lcore_id = rte_lcore_id();
 
 	if (!lcore_enabled[lcore_id])
 		return 0;
 
 	worker_app = &lcore_apps[lcore_id];
+	pacing_cycles = client_pacing_cycles_per_burst();
+	if (pacing_cycles != 0)
+		next_tx_tsc = rte_rdtsc() +
+			(pacing_cycles * worker_app->tx_queue_id) / worker_count;
 	if (client_conf.duration_secs != 0)
 		stop_tx_tsc = rte_rdtsc() + client_conf.duration_secs * hz;
 
-	printf("client lcore=%u port=%u rxq=%u txq=%u src_ip=%u.%u.%u.%u src_port=%u dst_mac=" RTE_ETHER_ADDR_PRT_FMT " packet_len=%u\n",
+	printf("client lcore=%u port=%u rxq=%u txq=%u src_ip=%u.%u.%u.%u src_port=%u dst_mac=" RTE_ETHER_ADDR_PRT_FMT " packet_len=%u rate_mbps=%u pacing_cycles=%" PRIu64 "\n",
 		lcore_id, worker_app->port_id, worker_app->rx_queue_id,
 		worker_app->tx_queue_id,
 		((CLIENT_INTERNAL_SRC_ADDR + worker_app->tx_queue_id) >> 24) & 0xff,
@@ -137,7 +166,7 @@ static int client_worker_main(__rte_unused void *arg)
 		(CLIENT_INTERNAL_SRC_ADDR + worker_app->tx_queue_id) & 0xff,
 		(uint16_t)(CLIENT_INTERNAL_SRC_L4 + worker_app->tx_queue_id),
 		RTE_ETHER_ADDR_BYTES(&client_conf.dst_mac),
-		client_packet_len(&client_conf));
+		client_packet_len(&client_conf), client_conf.rate_mbps, pacing_cycles);
 
 	while (!force_quit) {
 		const uint64_t cur_tsc = rte_rdtsc();
@@ -172,6 +201,16 @@ static int client_worker_main(__rte_unused void *arg)
 			}
 			rte_pause();
 			continue;
+		}
+
+		if (pacing_cycles != 0) {
+			const uint64_t tx_tsc = rte_rdtsc();
+
+			if (tx_tsc < next_tx_tsc) {
+				rte_pause();
+				continue;
+			}
+			next_tx_tsc = tx_tsc + pacing_cycles;
 		}
 
 		transmit_requests(worker_app, bufs);

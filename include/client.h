@@ -18,6 +18,7 @@ struct client_conf {
 
     uint16_t payload_len;
     uint16_t burst_size;
+    uint32_t rate_mbps;
     uint64_t duration_secs;
 };
 

@@ -16,6 +16,7 @@ DST_MAC=${DST_MAC:-00:02:ca:44:20:85}
 BURST=${BURST:-64}
 PAYLOAD_LEN=${PAYLOAD_LEN:-1400}
 DURATION=${DURATION:-60}
+RATE_MBPS=${RATE_MBPS:-40000}
 TIMER_PERIOD=${TIMER_PERIOD:-1}
 
 cd "$WORKSPACE"
@@ -25,10 +26,11 @@ mkdir -p logs
 
 for i in $(seq 1 "$N"); do
     echo "[run_client_n] Run $i/$N"
-    echo "[run_client_n] LCORES=$LCORES PCI_ADDR=$PCI_ADDR PORT=$PORT DST_MAC=$DST_MAC BURST=$BURST PAYLOAD_LEN=$PAYLOAD_LEN DURATION=$DURATION TIMER_PERIOD=$TIMER_PERIOD"
+    echo "[run_client_n] LCORES=$LCORES PCI_ADDR=$PCI_ADDR PORT=$PORT DST_MAC=$DST_MAC BURST=$BURST PAYLOAD_LEN=$PAYLOAD_LEN DURATION=$DURATION RATE_MBPS=$RATE_MBPS TIMER_PERIOD=$TIMER_PERIOD"
     sudo "$WORKSPACE/build/client" -l "$LCORES" -a "$PCI_ADDR" -- \
         --port "$PORT" --dst-mac "$DST_MAC" --burst "$BURST" \
-        --payload-len "$PAYLOAD_LEN" --duration "$DURATION" -T "$TIMER_PERIOD"
+        --payload-len "$PAYLOAD_LEN" --duration "$DURATION" \
+        --rate-mbps "$RATE_MBPS" -T "$TIMER_PERIOD"
     rc=$?
     echo "[run_client_n] Exit code: $rc"
 done
