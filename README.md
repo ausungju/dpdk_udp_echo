@@ -103,7 +103,7 @@ sudo ./build/udpecho_client -l 5,6,7,8 -a 0000:01:00.0 -- \
     TX/RX burst 크기. 1~64, 기본값 64.
 
 --payload-len N
-    자동 생성할 UDP payload 길이. 0~1400, 기본값 64.
+    자동 생성할 UDP payload 길이. 0~1500, 기본값 64.
 
 --duration SEC
     송신 지속 시간. 0이면 계속 송신한다.
